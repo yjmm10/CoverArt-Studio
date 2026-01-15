@@ -29,7 +29,9 @@ import {
   EyeOff,
   Undo2,
   Redo2,
-  Copy
+  Copy,
+  Edit3,
+  Check
 } from 'lucide-react';
 import { 
   CanvasElement, 
@@ -213,7 +215,7 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
   };
 
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-300">
+    <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-300 h-full overflow-y-auto">
       <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-4">Canvas Elements ({elements.length})</label>
       {elements.length === 0 ? (
         <div className="py-20 border-2 border-dashed border-gray-100 flex flex-col items-center text-center px-4">
@@ -490,6 +492,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [resizingId, setResizingId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [renamingSnapId, setRenamingSnapId] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef({ x: 0, y: 0, elX: 0, elY: 0, width: 0, height: 0 });
@@ -537,8 +540,6 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     };
     setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedId(newEl.id);
-    
-    // Auto switch tab based on type
     if (newEl.type === 'text') setActiveTab('text');
     if (newEl.type === 'shape') setActiveTab('shapes');
   }, [clipboard, project, pushToHistory]);
@@ -554,7 +555,6 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     };
     setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedId(newEl.id);
-    
     if (newEl.type === 'text') setActiveTab('text');
     if (newEl.type === 'shape') setActiveTab('shapes');
   }, [project, pushToHistory]);
@@ -567,7 +567,6 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     
     const el = project.elements.find(item => item.id === id);
     if (el) {
-      // --- AUTO TAB SWITCH LOGIC ---
       if (el.type === 'text') setActiveTab('text');
       else if (el.type === 'shape') setActiveTab('shapes');
       else setActiveTab('layers');
@@ -588,34 +587,18 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       if (editingId) return;
 
       const isCmd = e.metaKey || e.ctrlKey;
-      
-      if (isCmd && e.key === 'z') {
-        e.preventDefault();
-        undo();
-      }
-      if (isCmd && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
-        e.preventDefault();
-        redo();
-      }
+      if (isCmd && e.key === 'z') { e.preventDefault(); undo(); }
+      if (isCmd && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); redo(); }
       if (isCmd && e.key === 'c') {
         const selected = project.elements.find(el => el.id === selectedId);
-        if (selected) {
-          e.preventDefault();
-          copyElement(selected);
-        }
+        if (selected) { e.preventDefault(); copyElement(selected); }
       }
-      if (isCmd && e.key === 'v') {
-        e.preventDefault();
-        pasteElement();
-      }
+      if (isCmd && e.key === 'v') { e.preventDefault(); pasteElement(); }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedId && !editingId) {
           e.preventDefault();
           pushToHistory(project);
-          setProject(prev => ({
-            ...prev,
-            elements: prev.elements.filter(el => el.id !== selectedId)
-          }));
+          setProject(prev => ({ ...prev, elements: prev.elements.filter(el => el.id !== selectedId) }));
           setSelectedId(null);
         }
       }
@@ -632,15 +615,11 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   }, []);
 
   useEffect(() => {
-    const handler = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
-    }, 1000);
+    const handler = setTimeout(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(project)); }, 1000);
     return () => clearTimeout(handler);
   }, [project]);
 
-  useEffect(() => {
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots));
-  }, [snapshots]);
+  useEffect(() => { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots)); }, [snapshots]);
 
   const exportConfig = () => {
     const configBlob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
@@ -661,9 +640,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         const imported = JSON.parse(event.target?.result as string);
         pushToHistory(project);
         setProject(imported);
-      } catch (err) {
-        alert("Invalid project configuration file.");
-      }
+      } catch (err) { alert("Invalid project configuration file."); }
     };
     reader.readAsText(file);
   };
@@ -687,8 +664,10 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   };
 
-  const deleteSnapshot = (id: string) => {
-    setSnapshots(snapshots.filter(s => s.id !== id));
+  const deleteSnapshot = (id: string) => { setSnapshots(snapshots.filter(s => s.id !== id)); };
+
+  const renameSnapshot = (id: string, newName: string) => {
+    setSnapshots(prev => prev.map(s => s.id === id ? { ...s, name: newName } : s));
   };
 
   const handleStartResize = useCallback((e: React.MouseEvent, id: string) => {
@@ -727,23 +706,14 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         }));
       }
     };
-    
-    const handleUp = () => { 
-      if (draggingId || resizingId) {
-        setDraggingId(null); 
-        setResizingId(null); 
-      }
-    };
+    const handleUp = () => { setDraggingId(null); setResizingId(null); };
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
     return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
   }, [draggingId, resizingId]);
 
   const updateElement = useCallback((id: string, updates: Partial<CanvasElement>) => {
-    setProject(prev => ({
-      ...prev,
-      elements: prev.elements.map(el => el.id === id ? { ...el, ...updates } as CanvasElement : el)
-    }));
+    setProject(prev => ({ ...prev, elements: prev.elements.map(el => el.id === id ? { ...el, ...updates } as CanvasElement : el) }));
   }, []);
 
   const addText = useCallback(() => {
@@ -780,9 +750,8 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       reader.onload = (event) => {
         const result = event.target?.result as string;
         pushToHistory(project);
-        if (type === 'background') {
-          setProject(prev => ({ ...prev, background: { ...prev.background, type: 'image', value: result } }));
-        } else {
+        if (type === 'background') { setProject(prev => ({ ...prev, background: { ...prev.background, type: 'image', value: result } })); }
+        else {
           const newImg: ImageElement = {
             id: Math.random().toString(36).substr(2, 9),
             type: 'image', src: result, x: 20, y: 20, rotation: 0, scale: 0.5, zIndex: project.elements.length, opacity: 1, width: 400, height: 400, borderRadius: 0
@@ -829,20 +798,10 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
           <div className="h-8 w-px bg-black/10 mx-2"></div>
           <div className="flex items-center space-x-2">
-            <button 
-              onClick={undo} 
-              disabled={past.length === 0}
-              className={`p-2 rounded-full border-2 border-black transition-all ${past.length > 0 ? 'hover:bg-black hover:text-white' : 'opacity-20 pointer-events-none'}`}
-              title="Undo (Ctrl+Z)"
-            >
+            <button onClick={undo} disabled={past.length === 0} className={`p-2 rounded-full border-2 border-black transition-all ${past.length > 0 ? 'hover:bg-black hover:text-white' : 'opacity-20 pointer-events-none'}`} title="Undo (Ctrl+Z)">
               <Undo2 size={16} />
             </button>
-            <button 
-              onClick={redo} 
-              disabled={future.length === 0}
-              className={`p-2 rounded-full border-2 border-black transition-all ${future.length > 0 ? 'hover:bg-black hover:text-white' : 'opacity-20 pointer-events-none'}`}
-              title="Redo (Ctrl+Y)"
-            >
+            <button onClick={redo} disabled={future.length === 0} className={`p-2 rounded-full border-2 border-black transition-all ${future.length > 0 ? 'hover:bg-black hover:text-white' : 'opacity-20 pointer-events-none'}`} title="Redo (Ctrl+Y)">
               <Redo2 size={16} />
             </button>
           </div>
@@ -850,11 +809,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <div className="flex items-center space-x-3">
            <div className="flex bg-gray-50 p-1 border-2 border-black rounded-sm mr-2">
              {['1:1', '4:5', '9:16', '16:9'].map(r => (
-               <button 
-                 key={r} 
-                 onClick={() => { pushToHistory(project); setProject(p => ({ ...p, aspectRatio: r as any })); }}
-                 className={`px-3 py-1 text-[8px] font-black uppercase transition-all ${project.aspectRatio === r ? 'bg-black text-white' : 'text-gray-400 hover:text-black'}`}
-               >
+               <button key={r} onClick={() => { pushToHistory(project); setProject(p => ({ ...p, aspectRatio: r as any })); }} className={`px-3 py-1 text-[8px] font-black uppercase transition-all ${project.aspectRatio === r ? 'bg-black text-white' : 'text-gray-400 hover:text-black'}`}>
                  {r}
                </button>
              ))}
@@ -874,11 +829,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               { id: 'shapes', icon: Square },
               { id: 'history', icon: HistoryIcon }
             ].map(tab => (
-              <button 
-                key={tab.id} 
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`flex-1 py-4 flex justify-center border-r border-black last:border-r-0 transition-all ${activeTab === tab.id ? 'bg-black text-white' : 'hover:bg-gray-50 text-gray-300'}`}
-              >
+              <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex-1 py-4 flex justify-center border-r border-black last:border-r-0 transition-all ${activeTab === tab.id ? 'bg-black text-white' : 'hover:bg-gray-50 text-gray-300'}`}>
                 <tab.icon size={18} />
               </button>
             ))}
@@ -914,36 +865,57 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               </div>
             )}
             {activeTab === 'history' && (
-              <div className="space-y-8 animate-in fade-in slide-in-from-left-4 duration-300">
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={takeSnapshot} className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2">
-                    <Save size={20}/>
-                    <span className="text-[8px] font-black uppercase">Snapshot</span>
-                  </button>
-                  <button onClick={exportConfig} className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2">
-                    <FileJson size={20}/>
-                    <span className="text-[8px] font-black uppercase">Export JSON</span>
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-4">Saved Revisions</label>
-                  {snapshots.map(snap => (
-                    <div key={snap.id} className="group border-2 border-black p-3 hover:bg-gray-50 flex items-center justify-between transition-all">
-                      <div onClick={() => restoreSnapshot(snap)} className="flex flex-col cursor-pointer flex-1">
-                        <span className="text-[10px] font-black uppercase">{snap.name}</span>
-                        <span className="text-[8px] text-gray-400">{new Date(snap.timestamp).toLocaleString()}</span>
+              <div className="h-full flex flex-col animate-in fade-in slide-in-from-left-4 duration-300">
+                {/* Upper: Snapshots */}
+                <div className="flex-1 overflow-y-auto space-y-6 pb-6">
+                  <div className="flex justify-between items-center mb-4">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Project Snapshots</label>
+                    <button onClick={takeSnapshot} className="p-1 hover:bg-black hover:text-white border border-black rounded transition-all" title="Save Revision">
+                      <Plus size={14}/>
+                    </button>
+                  </div>
+                  {snapshots.length === 0 ? (
+                    <div className="py-12 border-2 border-dashed border-gray-100 flex flex-col items-center text-center px-4">
+                      <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">No manual snapshots.</p>
+                    </div>
+                  ) : snapshots.map(snap => (
+                    <div key={snap.id} className="group border-2 border-black p-3 hover:bg-gray-50 transition-all">
+                      <div className="flex items-center justify-between mb-2">
+                        {renamingSnapId === snap.id ? (
+                          <div className="flex flex-1 items-center space-x-2">
+                            <input autoFocus onBlur={() => setRenamingSnapId(null)} onKeyDown={(e) => e.key === 'Enter' && setRenamingSnapId(null)} value={snap.name} onChange={(e) => renameSnapshot(snap.id, e.target.value)} className="flex-1 bg-white border border-black px-1 text-[10px] font-black outline-none" />
+                            <button onClick={() => setRenamingSnapId(null)} className="text-black"><Check size={12}/></button>
+                          </div>
+                        ) : (
+                          <div onClick={() => restoreSnapshot(snap)} className="flex flex-col cursor-pointer flex-1 overflow-hidden">
+                            <span className="text-[10px] font-black uppercase truncate">{snap.name}</span>
+                            <span className="text-[8px] text-gray-400 uppercase">{new Date(snap.timestamp).toLocaleTimeString()}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => setRenamingSnapId(snap.id)} className="p-1 text-gray-400 hover:text-black transition-colors"><Edit3 size={12}/></button>
+                          <button onClick={() => deleteSnapshot(snap.id)} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={12}/></button>
+                        </div>
                       </div>
-                      <button onClick={() => deleteSnapshot(snap.id)} className="opacity-0 group-hover:opacity-100 p-2 text-gray-300 hover:text-red-500 transition-all">
-                        <Trash2 size={12}/>
-                      </button>
+                      <button onClick={() => restoreSnapshot(snap)} className="w-full py-1.5 border border-black text-[8px] font-black uppercase hover:bg-black hover:text-white transition-all">Restore</button>
                     </div>
                   ))}
                 </div>
-                <div className="pt-6 border-t border-black/5">
-                   <input type="file" id="import-json" className="hidden" accept=".json" onChange={importConfig} />
-                   <label htmlFor="import-json" className="line-art-btn block text-center py-3 bg-white text-[10px] font-black uppercase tracking-widest cursor-pointer hover:bg-black hover:text-white transition-all flex items-center justify-center space-x-2">
-                      <Upload size={14}/> <span>Import Config</span>
-                   </label>
+
+                {/* Lower: Config */}
+                <div className="pt-6 border-t-2 border-black space-y-4">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">Configuration</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={exportConfig} className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2">
+                      <FileJson size={20}/>
+                      <span className="text-[8px] font-black uppercase">Export JSON</span>
+                    </button>
+                    <label htmlFor="import-json" className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2 cursor-pointer">
+                      <Upload size={20}/>
+                      <span className="text-[8px] font-black uppercase">Import JSON</span>
+                      <input type="file" id="import-json" className="hidden" accept=".json" onChange={importConfig} />
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
@@ -1001,30 +973,14 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 <input type="file" id="quick-img-up" className="hidden" accept="image/*" onChange={e => handleFileUpload(e, 'image')} />
               </button>
               <div className="w-px bg-black/10 h-6 mx-2"></div>
-              
-              <button 
-                onClick={() => {
-                  const selected = project.elements.find(el => el.id === selectedId);
-                  if (selected) copyElement(selected);
-                }} 
-                disabled={!selectedId}
-                className={`flex flex-col items-center group transition-transform hover:scale-110 ${!selectedId ? 'opacity-20 grayscale' : ''}`} 
-                title="Copy (Ctrl+C)"
-              >
+              <button onClick={() => { const selected = project.elements.find(el => el.id === selectedId); if (selected) copyElement(selected); }} disabled={!selectedId} className={`flex flex-col items-center group transition-transform hover:scale-110 ${!selectedId ? 'opacity-20 grayscale' : ''}`} title="Copy (Ctrl+C)">
                 <Copy size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Copy</span>
               </button>
-
-              <button 
-                onClick={pasteElement} 
-                disabled={!clipboard}
-                className={`flex flex-col items-center group transition-transform hover:scale-110 ${!clipboard ? 'opacity-20 grayscale' : ''}`} 
-                title="Paste (Ctrl+V)"
-              >
+              <button onClick={pasteElement} disabled={!clipboard} className={`flex flex-col items-center group transition-transform hover:scale-110 ${!clipboard ? 'opacity-20 grayscale' : ''}`} title="Paste (Ctrl+V)">
                 <Clipboard size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Paste</span>
               </button>
-
               <div className="w-px bg-black/10 h-6 mx-2"></div>
               <button onClick={() => setActiveTab('layers')} className="flex flex-col items-center group transition-transform hover:scale-110" title="Layers">
                 <LayersIcon size={20}/>
