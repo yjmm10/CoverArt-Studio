@@ -31,7 +31,8 @@ import {
   Redo2,
   Copy,
   Edit3,
-  Check
+  Check,
+  GripVertical
 } from 'lucide-react';
 import { 
   CanvasElement, 
@@ -187,6 +188,8 @@ const ProjectTab = memo(({ project, setProject, handleFileUpload }: any) => {
 });
 
 const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCopy, pushToHistory }: any) => {
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+
   const reorder = (id: string, dir: 'up' | 'down') => {
     setProject((prev: DesignProject) => {
       const idx = prev.elements.findIndex(el => el.id === id);
@@ -214,8 +217,32 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
     if (selectedId === id) setSelectedId(null);
   };
 
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedIdx(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIdx === null || draggedIdx === index) return;
+    
+    // Sort logic
+    setProject((prev: DesignProject) => {
+      const newElements = [...prev.elements];
+      const draggedItem = newElements[draggedIdx];
+      newElements.splice(draggedIdx, 1);
+      newElements.splice(index, 0, draggedItem);
+      return { ...prev, elements: newElements };
+    });
+    setDraggedIdx(index);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIdx(null);
+  };
+
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-300 h-full overflow-y-auto">
+    <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-300 h-full overflow-y-auto pb-20">
       <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-4">Canvas Elements ({elements.length})</label>
       {elements.length === 0 ? (
         <div className="py-20 border-2 border-dashed border-gray-100 flex flex-col items-center text-center px-4">
@@ -223,15 +250,24 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
         </div>
       ) : (
         <div className="space-y-2">
+          {/* Note: In Canvas rendering, the LAST item in elements is on top. 
+              In the Layers panel UI, we show the LAST item (top layer) at the START of the list. */}
           {[...elements].reverse().map((el, i) => {
             const actualIdx = elements.length - 1 - i;
             return (
               <div 
                 key={el.id} 
+                draggable
+                onDragStart={(e) => handleDragStart(e, actualIdx)}
+                onDragOver={(e) => handleDragOver(e, actualIdx)}
+                onDragEnd={handleDragEnd}
                 onClick={() => setSelectedId(el.id)}
-                className={`group border-2 p-3 flex items-center justify-between transition-all cursor-pointer ${selectedId === el.id ? 'border-black bg-black text-white' : 'border-black/5 hover:border-black/20 bg-white'}`}
+                className={`group border-2 p-3 flex items-center justify-between transition-all cursor-pointer ${selectedId === el.id ? 'border-black bg-black text-white shadow-lg scale-[1.02] z-10' : 'border-black/5 hover:border-black/20 bg-white'} ${draggedIdx === actualIdx ? 'opacity-50 border-dashed' : ''}`}
               >
                 <div className="flex items-center space-x-3 overflow-hidden">
+                  <div className="shrink-0 text-gray-400 group-hover:text-inherit">
+                    <GripVertical size={14} className="cursor-grab active:cursor-grabbing" />
+                  </div>
                   <div className="shrink-0">
                     {el.type === 'text' && <TypeIcon size={14} />}
                     {el.type === 'image' && <ImageIcon size={14} />}
@@ -248,20 +284,6 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
                     className="p-1 hover:bg-white/20 rounded"
                   >
                     <Copy size={14} />
-                  </button>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); reorder(el.id, 'up'); }}
-                    disabled={actualIdx === elements.length - 1}
-                    className="p-1 hover:bg-white/20 rounded disabled:opacity-20"
-                  >
-                    <ChevronUp size={14} />
-                  </button>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); reorder(el.id, 'down'); }}
-                    disabled={actualIdx === 0}
-                    className="p-1 hover:bg-white/20 rounded disabled:opacity-20"
-                  >
-                    <ChevronDown size={14} />
                   </button>
                   <button 
                     onClick={(e) => { e.stopPropagation(); remove(el.id); }}
@@ -347,7 +369,7 @@ const TextTab = memo(({ selectedElement, updateElement, addText }: any) => {
 // --- CANVAS COMPONENTS ---
 
 const CanvasElementRenderer = memo(({ 
-  el, isSelected, isEditing, isDragging, onMouseDown, onDoubleClick, onUpdateText, onUpdateScale, onStartResize 
+  el, index, isSelected, isEditing, isDragging, onMouseDown, onDoubleClick, onUpdateText, onUpdateScale, onStartResize 
 }: any) => {
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -373,7 +395,8 @@ const CanvasElementRenderer = memo(({
     top: `${el.y}%`,
     transform: `rotate(${el.rotation}deg) scale(${el.scale})`,
     transformOrigin: '0 0',
-    zIndex: el.zIndex,
+    // Directly use the array index for z-index to ensure perfect layer sync
+    zIndex: index + 1,
     position: 'absolute',
     userSelect: 'none',
     pointerEvents: 'auto',
@@ -401,12 +424,12 @@ const CanvasElementRenderer = memo(({
       onMouseDown={onMouseDown}
       onDoubleClick={onDoubleClick}
       style={baseStyles}
-      className={`group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} ${isSelected ? 'ring-2 ring-black ring-offset-4' : 'hover:ring-1 hover:ring-black/20'}`}
+      className={`group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} ${isSelected ? 'ring-2 ring-black ring-offset-4 shadow-2xl' : 'hover:ring-1 hover:ring-black/20'}`}
     >
       {isSelected && (
         <div 
           onMouseDown={handleResizeDown}
-          className="absolute -bottom-3 -right-3 w-10 h-10 bg-black text-white flex items-center justify-center cursor-nwse-resize z-[110] shadow-2xl border-4 border-white hover:scale-110 transition-transform active:scale-95"
+          className="absolute -bottom-3 -right-3 w-10 h-10 bg-black text-white flex items-center justify-center cursor-nwse-resize z-[999] shadow-2xl border-4 border-white hover:scale-110 transition-transform active:scale-95"
           title="Drag bottom-right to resize"
         >
           <Maximize2 size={18} />
@@ -944,9 +967,11 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 }}
                />
             )}
-            {project.elements.map((el) => (
+            {/* Direct mapping to array index for z-index source of truth */}
+            {project.elements.map((el, index) => (
               <CanvasElementRenderer
                 key={el.id} el={el}
+                index={index}
                 isSelected={selectedId === el.id}
                 isEditing={editingId === el.id}
                 isDragging={draggingId === el.id}
