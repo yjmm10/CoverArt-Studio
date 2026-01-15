@@ -18,7 +18,7 @@ import {
   Save,
   Download,
   Upload,
-  History,
+  History as HistoryIcon,
   Clipboard,
   FileJson,
   RotateCw,
@@ -26,7 +26,10 @@ import {
   ChevronUp,
   ChevronDown,
   Eye,
-  EyeOff
+  EyeOff,
+  Undo2,
+  Redo2,
+  Copy
 } from 'lucide-react';
 import { 
   CanvasElement, 
@@ -181,7 +184,7 @@ const ProjectTab = memo(({ project, setProject, handleFileUpload }: any) => {
   );
 });
 
-const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject }: any) => {
+const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCopy, pushToHistory }: any) => {
   const reorder = (id: string, dir: 'up' | 'down') => {
     setProject((prev: DesignProject) => {
       const idx = prev.elements.findIndex(el => el.id === id);
@@ -189,6 +192,7 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject }: any
       if (dir === 'up' && idx === prev.elements.length - 1) return prev;
       if (dir === 'down' && idx === 0) return prev;
       
+      pushToHistory(prev);
       const nextElements = [...prev.elements];
       const targetIdx = dir === 'up' ? idx + 1 : idx - 1;
       const [moved] = nextElements.splice(idx, 1);
@@ -198,10 +202,13 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject }: any
   };
 
   const remove = (id: string) => {
-    setProject((prev: DesignProject) => ({
-      ...prev,
-      elements: prev.elements.filter(el => el.id !== id)
-    }));
+    setProject((prev: DesignProject) => {
+      pushToHistory(prev);
+      return {
+        ...prev,
+        elements: prev.elements.filter(el => el.id !== id)
+      };
+    });
     if (selectedId === id) setSelectedId(null);
   };
 
@@ -233,6 +240,13 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject }: any
                   </span>
                 </div>
                 <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); onCopy(el); }}
+                    title="Duplicate"
+                    className="p-1 hover:bg-white/20 rounded"
+                  >
+                    <Copy size={14} />
+                  </button>
                   <button 
                     onClick={(e) => { e.stopPropagation(); reorder(el.id, 'up'); }}
                     disabled={actualIdx === elements.length - 1}
@@ -464,6 +478,11 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     id: '1', name: 'UNTITLED_COVER', background: { type: 'color', value: '#ffffff', rotation: 0, scale: 1, offsetX: 0, offsetY: 0, opacity: 1 },
     elements: [], aspectRatio: '1:1', lastModified: Date.now()
   });
+  
+  const [past, setPast] = useState<DesignProject[]>([]);
+  const [future, setFuture] = useState<DesignProject[]>([]);
+  const [clipboard, setClipboard] = useState<CanvasElement | null>(null);
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'text' | 'layers' | 'project' | 'shapes' | 'history'>('project');
@@ -474,6 +493,136 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef({ x: 0, y: 0, elX: 0, elY: 0, width: 0, height: 0 });
+
+  const pushToHistory = useCallback((currentProject: DesignProject) => {
+    setPast(prev => [...prev, JSON.parse(JSON.stringify(currentProject))].slice(-50));
+    setFuture([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    const newPast = past.slice(0, past.length - 1);
+    
+    setFuture(prev => [JSON.parse(JSON.stringify(project)), ...prev]);
+    setPast(newPast);
+    setProject(previous);
+    setSelectedId(null);
+  }, [past, project]);
+
+  const redo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[0];
+    const newFuture = future.slice(1);
+    
+    setPast(prev => [...prev, JSON.parse(JSON.stringify(project))]);
+    setFuture(newFuture);
+    setProject(next);
+    setSelectedId(null);
+  }, [future, project]);
+
+  const copyElement = useCallback((el: CanvasElement) => {
+    setClipboard(JSON.parse(JSON.stringify(el)));
+  }, []);
+
+  const pasteElement = useCallback(() => {
+    if (!clipboard) return;
+    pushToHistory(project);
+    const newEl = { 
+      ...JSON.parse(JSON.stringify(clipboard)), 
+      id: Math.random().toString(36).substr(2, 9),
+      x: clipboard.x + 5,
+      y: clipboard.y + 5,
+      zIndex: project.elements.length
+    };
+    setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedId(newEl.id);
+    
+    // Auto switch tab based on type
+    if (newEl.type === 'text') setActiveTab('text');
+    if (newEl.type === 'shape') setActiveTab('shapes');
+  }, [clipboard, project, pushToHistory]);
+
+  const duplicateElement = useCallback((el: CanvasElement) => {
+    pushToHistory(project);
+    const newEl = { 
+      ...JSON.parse(JSON.stringify(el)), 
+      id: Math.random().toString(36).substr(2, 9),
+      x: el.x + 5,
+      y: el.y + 5,
+      zIndex: project.elements.length
+    };
+    setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedId(newEl.id);
+    
+    if (newEl.type === 'text') setActiveTab('text');
+    if (newEl.type === 'shape') setActiveTab('shapes');
+  }, [project, pushToHistory]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent, id: string) => {
+    if (editingId === id) return;
+    e.stopPropagation();
+    setSelectedId(id);
+    setDraggingId(id);
+    
+    const el = project.elements.find(item => item.id === id);
+    if (el) {
+      // --- AUTO TAB SWITCH LOGIC ---
+      if (el.type === 'text') setActiveTab('text');
+      else if (el.type === 'shape') setActiveTab('shapes');
+      else setActiveTab('layers');
+
+      if (canvasRef.current) {
+        dragStartPos.current = { 
+          x: e.clientX, y: e.clientY, elX: el.x, elY: el.y, 
+          width: (el as any).width || 200, height: (el as any).height || 100 
+        };
+      }
+    }
+  }, [editingId, project.elements]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName);
+      if (isInput && !editingId) return; 
+      if (editingId) return;
+
+      const isCmd = e.metaKey || e.ctrlKey;
+      
+      if (isCmd && e.key === 'z') {
+        e.preventDefault();
+        undo();
+      }
+      if (isCmd && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        e.preventDefault();
+        redo();
+      }
+      if (isCmd && e.key === 'c') {
+        const selected = project.elements.find(el => el.id === selectedId);
+        if (selected) {
+          e.preventDefault();
+          copyElement(selected);
+        }
+      }
+      if (isCmd && e.key === 'v') {
+        e.preventDefault();
+        pasteElement();
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedId && !editingId) {
+          e.preventDefault();
+          pushToHistory(project);
+          setProject(prev => ({
+            ...prev,
+            elements: prev.elements.filter(el => el.id !== selectedId)
+          }));
+          setSelectedId(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, selectedId, project, copyElement, pasteElement, editingId, pushToHistory]);
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -510,6 +659,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     reader.onload = (event) => {
       try {
         const imported = JSON.parse(event.target?.result as string);
+        pushToHistory(project);
         setProject(imported);
       } catch (err) {
         alert("Invalid project configuration file.");
@@ -529,7 +679,8 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   };
 
   const restoreSnapshot = (snap: Snapshot) => {
-    if (confirm("Restore this snapshot? Current unsaved changes will be lost.")) {
+    if (confirm("Restore this snapshot? Current history will be pushed to undo stack.")) {
+      pushToHistory(project);
       setProject(JSON.parse(JSON.stringify(snap.data)));
       setSelectedId(null);
       setEditingId(null);
@@ -540,31 +691,18 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setSnapshots(snapshots.filter(s => s.id !== id));
   };
 
-  const handleMouseDown = useCallback((e: React.MouseEvent, id: string) => {
-    if (editingId === id) return;
-    e.stopPropagation();
-    setSelectedId(id);
-    setDraggingId(id);
-    const el = project.elements.find(item => item.id === id);
-    if (el && canvasRef.current) {
-      dragStartPos.current = { 
-        x: e.clientX, y: e.clientY, elX: el.x, elY: el.y, 
-        width: (el as any).width || 200, height: (el as any).height || 100 
-      };
-    }
-  }, [editingId, project.elements]);
-
   const handleStartResize = useCallback((e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     setResizingId(id);
     const el = project.elements.find(item => item.id === id);
     if (el) {
+      pushToHistory(project);
       dragStartPos.current = { 
         x: e.clientX, y: e.clientY, elX: el.x, elY: el.y, 
         width: (el as any).width || 200, height: (el as any).height || 100 
       };
     }
-  }, [project.elements]);
+  }, [project, pushToHistory]);
 
   useEffect(() => {
     const handleMove = (e: MouseEvent) => {
@@ -589,7 +727,13 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         }));
       }
     };
-    const handleUp = () => { setDraggingId(null); setResizingId(null); };
+    
+    const handleUp = () => { 
+      if (draggingId || resizingId) {
+        setDraggingId(null); 
+        setResizingId(null); 
+      }
+    };
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
     return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
@@ -603,6 +747,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   }, []);
 
   const addText = useCallback(() => {
+    pushToHistory(project);
     const newText: TextElement = {
       id: Math.random().toString(36).substr(2, 9),
       type: 'text', content: 'NEW TEXT', x: 20, y: 20, rotation: 0, scale: 1, zIndex: project.elements.length, opacity: 1,
@@ -613,9 +758,10 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setProject(prev => ({ ...prev, elements: [...prev.elements, newText] }));
     setSelectedId(newText.id);
     setActiveTab('text');
-  }, [project.elements.length]);
+  }, [project, pushToHistory]);
 
   const addShape = useCallback((shapeType: ShapeType) => {
+    pushToHistory(project);
     const newShape: ShapeElement = {
       id: Math.random().toString(36).substr(2, 9),
       type: 'shape', shapeType, x: 25, y: 25, rotation: 0, scale: 1, zIndex: project.elements.length, opacity: 1,
@@ -625,7 +771,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setProject(prev => ({ ...prev, elements: [...prev.elements, newShape] }));
     setSelectedId(newShape.id);
     setActiveTab('shapes');
-  }, [project.elements.length]);
+  }, [project, pushToHistory]);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>, type: 'background' | 'image') => {
     const file = e.target.files?.[0];
@@ -633,6 +779,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const result = event.target?.result as string;
+        pushToHistory(project);
         if (type === 'background') {
           setProject(prev => ({ ...prev, background: { ...prev.background, type: 'image', value: result } }));
         } else {
@@ -646,7 +793,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       };
       reader.readAsDataURL(file);
     }
-  }, [project.elements.length]);
+  }, [project, pushToHistory]);
 
   const exportImage = async () => {
     if (!canvasRef.current) return;
@@ -680,13 +827,32 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               className="font-black uppercase tracking-widest text-xs outline-none bg-transparent w-48 border-b-2 border-transparent focus:border-black transition-all pb-1"
             />
           </div>
+          <div className="h-8 w-px bg-black/10 mx-2"></div>
+          <div className="flex items-center space-x-2">
+            <button 
+              onClick={undo} 
+              disabled={past.length === 0}
+              className={`p-2 rounded-full border-2 border-black transition-all ${past.length > 0 ? 'hover:bg-black hover:text-white' : 'opacity-20 pointer-events-none'}`}
+              title="Undo (Ctrl+Z)"
+            >
+              <Undo2 size={16} />
+            </button>
+            <button 
+              onClick={redo} 
+              disabled={future.length === 0}
+              className={`p-2 rounded-full border-2 border-black transition-all ${future.length > 0 ? 'hover:bg-black hover:text-white' : 'opacity-20 pointer-events-none'}`}
+              title="Redo (Ctrl+Y)"
+            >
+              <Redo2 size={16} />
+            </button>
+          </div>
         </div>
         <div className="flex items-center space-x-3">
            <div className="flex bg-gray-50 p-1 border-2 border-black rounded-sm mr-2">
              {['1:1', '4:5', '9:16', '16:9'].map(r => (
                <button 
                  key={r} 
-                 onClick={() => setProject(p => ({ ...p, aspectRatio: r as any }))}
+                 onClick={() => { pushToHistory(project); setProject(p => ({ ...p, aspectRatio: r as any })); }}
                  className={`px-3 py-1 text-[8px] font-black uppercase transition-all ${project.aspectRatio === r ? 'bg-black text-white' : 'text-gray-400 hover:text-black'}`}
                >
                  {r}
@@ -706,7 +872,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               { id: 'layers', icon: LayersIcon },
               { id: 'text', icon: TypeIcon },
               { id: 'shapes', icon: Square },
-              { id: 'history', icon: History }
+              { id: 'history', icon: HistoryIcon }
             ].map(tab => (
               <button 
                 key={tab.id} 
@@ -719,7 +885,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
             {activeTab === 'project' && <ProjectTab project={project} setProject={setProject} handleFileUpload={handleFileUpload} />}
-            {activeTab === 'layers' && <LayersTab elements={project.elements} selectedId={selectedId} setSelectedId={setSelectedId} setProject={setProject} />}
+            {activeTab === 'layers' && <LayersTab elements={project.elements} selectedId={selectedId} setSelectedId={setSelectedId} setProject={setProject} onCopy={duplicateElement} pushToHistory={pushToHistory} />}
             {activeTab === 'text' && <TextTab selectedElement={selectedElement} updateElement={updateElement} addText={addText} />}
             {activeTab === 'shapes' && (
               <div className="space-y-8 animate-in fade-in slide-in-from-left-4 duration-300">
@@ -821,21 +987,46 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             ))}
           </div>
           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center space-x-6 bg-white border-2 border-black px-8 py-4 shadow-xl z-50 rounded-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <button onClick={addText} className="flex flex-col items-center group transition-transform hover:scale-110">
+              <button onClick={addText} className="flex flex-col items-center group transition-transform hover:scale-110" title="Add Text">
                 <TypeIcon size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Text</span>
               </button>
-              <button onClick={() => addShape('rect')} className="flex flex-col items-center group transition-transform hover:scale-110">
+              <button onClick={() => addShape('rect')} className="flex flex-col items-center group transition-transform hover:scale-110" title="Add Shape">
                 <Square size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Shape</span>
               </button>
-              <button onClick={() => document.getElementById('quick-img-up')?.click()} className="flex flex-col items-center group transition-transform hover:scale-110">
+              <button onClick={() => document.getElementById('quick-img-up')?.click()} className="flex flex-col items-center group transition-transform hover:scale-110" title="Add Asset">
                 <ImageIcon size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Asset</span>
                 <input type="file" id="quick-img-up" className="hidden" accept="image/*" onChange={e => handleFileUpload(e, 'image')} />
               </button>
               <div className="w-px bg-black/10 h-6 mx-2"></div>
-              <button onClick={() => setActiveTab('layers')} className="flex flex-col items-center group transition-transform hover:scale-110">
+              
+              <button 
+                onClick={() => {
+                  const selected = project.elements.find(el => el.id === selectedId);
+                  if (selected) copyElement(selected);
+                }} 
+                disabled={!selectedId}
+                className={`flex flex-col items-center group transition-transform hover:scale-110 ${!selectedId ? 'opacity-20 grayscale' : ''}`} 
+                title="Copy (Ctrl+C)"
+              >
+                <Copy size={20}/>
+                <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Copy</span>
+              </button>
+
+              <button 
+                onClick={pasteElement} 
+                disabled={!clipboard}
+                className={`flex flex-col items-center group transition-transform hover:scale-110 ${!clipboard ? 'opacity-20 grayscale' : ''}`} 
+                title="Paste (Ctrl+V)"
+              >
+                <Clipboard size={20}/>
+                <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Paste</span>
+              </button>
+
+              <div className="w-px bg-black/10 h-6 mx-2"></div>
+              <button onClick={() => setActiveTab('layers')} className="flex flex-col items-center group transition-transform hover:scale-110" title="Layers">
                 <LayersIcon size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Layers</span>
               </button>
