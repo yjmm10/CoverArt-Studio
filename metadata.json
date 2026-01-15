@@ -1,0 +1,7 @@
+{
+  "name": "CoverArt Studio - Line Art Edition",
+  "description": "A sophisticated cover design tool for creating professional artwork covers with rich text effects, stickers, and AI-powered suggestions, featuring a modern line-art aesthetic.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
