@@ -32,7 +32,11 @@ import {
   Copy,
   Edit3,
   Check,
-  GripVertical
+  GripVertical,
+  XCircle,
+  Camera,
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 import { 
   CanvasElement, 
@@ -48,6 +52,93 @@ import {
 } from '../types';
 import * as htmlToImage from 'html-to-image';
 
+// --- HELPER: ROBUST DATA MIGRATION ---
+const migrateProject = (p: any): DesignProject => {
+  if (!p) throw new Error("Null project data");
+  
+  // 深度克隆，确保完全断开引用，这是恢复快照的关键
+  const clone = JSON.parse(JSON.stringify(p));
+  
+  // 1. 结构初始化
+  if (!clone.background) clone.background = {};
+  if (!clone.elements || !Array.isArray(clone.elements)) clone.elements = [];
+  if (!clone.id) clone.id = Math.random().toString(36).substr(2, 9);
+  if (!clone.name) clone.name = 'UNTITLED_COVER';
+  if (!clone.aspectRatio) clone.aspectRatio = '1:1';
+
+  // 2. 背景迁移 (确保所有现代属性都存在)
+  const bg = clone.background;
+  const isLegacy = 'value' in bg && !('fillValue' in bg);
+
+  if (isLegacy) {
+    const isImg = bg.type === 'image' || (bg.value && typeof bg.value === 'string' && bg.value.startsWith('data:image'));
+    clone.background = {
+      fillValue: isImg ? '#ffffff' : bg.value,
+      fillOpacity: isImg ? 1 : (bg.opacity ?? 1),
+      imageValue: isImg ? bg.value : '',
+      imageOpacity: isImg ? (bg.opacity ?? 1) : 1,
+      imageRotation: bg.rotation ?? 0,
+      imageScale: bg.scale ?? 1,
+      imageOffsetX: bg.offsetX ?? 0,
+      imageOffsetY: bg.offsetY ?? 0,
+    };
+  }
+
+  // 3. 强制校验所有背景字段
+  const finalBg = clone.background;
+  finalBg.fillValue = finalBg.fillValue ?? '#ffffff';
+  finalBg.fillOpacity = finalBg.fillOpacity ?? 1;
+  finalBg.imageValue = finalBg.imageValue ?? '';
+  finalBg.imageOpacity = finalBg.imageOpacity ?? 1;
+  finalBg.imageRotation = finalBg.imageRotation ?? 0;
+  finalBg.imageScale = finalBg.imageScale ?? 1;
+  finalBg.imageOffsetX = finalBg.imageOffsetX ?? 0;
+  finalBg.imageOffsetY = finalBg.imageOffsetY ?? 0;
+
+  // 4. 确保所有元素字段有效
+  clone.elements = clone.elements.map((el: any) => {
+    // 基础属性
+    el.id = el.id || Math.random().toString(36).substr(2, 9);
+    el.opacity = el.opacity ?? 1;
+    el.rotation = el.rotation ?? 0;
+    el.scale = el.scale ?? 1;
+    el.x = el.x ?? 0;
+    el.y = el.y ?? 0;
+    el.zIndex = el.zIndex ?? 0;
+    
+    // 类型特定属性补全
+    if (el.type === 'text') {
+      el.content = el.content || 'TEXT';
+      el.padding = el.padding ?? 0;
+      el.paddingColor = el.paddingColor ?? 'transparent';
+      el.borderRadius = el.borderRadius ?? 0;
+      el.strokeWidth = el.strokeWidth ?? 0;
+      el.strokeColor = el.strokeColor ?? '#000000';
+      el.fontWeight = el.fontWeight ?? '800';
+      el.fontFamily = el.fontFamily ?? FONTS[0].value;
+      el.fontSize = el.fontSize ?? 40;
+      el.textAlign = el.textAlign ?? 'center';
+      el.lineHeight = el.lineHeight ?? 1;
+      el.letterSpacing = el.letterSpacing ?? 0;
+      el.width = el.width ?? 400;
+      el.height = el.height ?? 100;
+    } else if (el.type === 'image') {
+      el.width = el.width ?? 300;
+      el.height = el.height ?? 300;
+      el.borderRadius = el.borderRadius ?? 0;
+    } else if (el.type === 'shape') {
+      el.width = el.width ?? 150;
+      el.height = el.height ?? 150;
+      el.fill = el.fill ?? '#000000';
+      el.strokeWidth = el.strokeWidth ?? 0;
+      el.strokeColor = el.strokeColor ?? '#000000';
+    }
+    return el;
+  });
+
+  return clone as DesignProject;
+};
+
 // --- SHARED UI COMPONENTS ---
 
 const ColorSection = memo(({ title, value, onChange, showTransparent = false }: { 
@@ -60,7 +151,7 @@ const ColorSection = memo(({ title, value, onChange, showTransparent = false }: 
         <div className="flex items-center space-x-2">
            <input 
              type="color" 
-             value={value.startsWith('#') ? value : '#000000'} 
+             value={value && value.startsWith('#') ? value : '#000000'} 
              onChange={(e) => onChange(e.target.value)} 
              className="w-6 h-6 border-2 border-black p-0 cursor-pointer rounded-full overflow-hidden" 
            />
@@ -160,26 +251,88 @@ const TransformSection = memo(({ el, updateElement }: { el: CanvasElement, updat
 ));
 
 const ProjectTab = memo(({ project, setProject, handleFileUpload }: any) => {
-  const handleScale = useCallback((v: number) => setProject((p: any) => ({ ...p, background: { ...p.background, scale: v } })), [setProject]);
-  const handleRotation = useCallback((v: number) => setProject((p: any) => ({ ...p, background: { ...p.background, rotation: v } })), [setProject]);
-  const handleOpacity = useCallback((v: number) => setProject((p: any) => ({ ...p, background: { ...p.background, opacity: v } })), [setProject]);
-  const handleColor = useCallback((v: string) => setProject((p: any) => ({ ...p, background: { ...p.background, value: v, type: v.includes('linear') ? 'gradient' : 'color' } })), [setProject]);
+  const updateBg = (updates: any) => {
+    setProject((prev: any) => ({
+      ...prev,
+      background: { ...prev.background, ...updates }
+    }));
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-left-4 duration-300">
-      <ColorSection title="Background Fill" value={project.background.value} onChange={handleColor} />
-      <ControlGroup title="Layer Properties">
-        <RangeControl label="Opacity" value={project.background.opacity} min={0} max={1} step={0.05} onAdjust={handleOpacity} />
-      </ControlGroup>
-      <ControlGroup title="Background Image">
-        <input type="file" id="bg-file-main" className="hidden" onChange={(e) => handleFileUpload(e, 'background')} />
-        <label htmlFor="bg-file-main" className="line-art-btn block text-center py-4 bg-white text-[10px] font-black uppercase tracking-widest cursor-pointer hover:bg-gray-50 flex items-center justify-center space-x-2">
-          <Upload size={14} /> <span>Replace Photo</span>
-        </label>
-        {project.background.type === 'image' && (
-          <div className="space-y-6 pt-4">
-            <RangeControl label="Scale" value={project.background.scale} min={0.1} max={5} step={0.01} suffix="x" onAdjust={handleScale} />
-            <RangeControl label="Rotation" value={project.background.rotation} min={-180} max={180} step={1} suffix="°" onAdjust={handleRotation} />
+      <div className="space-y-6">
+        <ColorSection 
+          title="Background Fill" 
+          value={project.background.fillValue} 
+          onChange={(v) => updateBg({ fillValue: v })} 
+        />
+        <RangeControl 
+          label="Fill Opacity" 
+          value={project.background.fillOpacity} 
+          min={0} max={1} step={0.05} 
+          onAdjust={(v) => updateBg({ fillOpacity: v })} 
+        />
+      </div>
+
+      <ControlGroup title="Background Image Overlay">
+        {project.background.imageValue ? (
+          <div className="space-y-6">
+             <div className="relative border-2 border-black p-1 aspect-video flex items-center justify-center bg-gray-50 overflow-hidden">
+                <img src={project.background.imageValue} alt="BG" className="max-w-full max-h-full object-contain" />
+                <button 
+                  onClick={() => updateBg({ imageValue: '' })}
+                  className="absolute top-1 right-1 p-1 bg-white border border-black hover:bg-black hover:text-white transition-colors"
+                >
+                  <Trash2 size={12} />
+                </button>
+             </div>
+             
+             <RangeControl 
+                label="Image Opacity" 
+                value={project.background.imageOpacity} 
+                min={0} max={1} step={0.05} 
+                onAdjust={(v) => updateBg({ imageOpacity: v })} 
+             />
+             <RangeControl 
+                label="Scale" 
+                value={project.background.imageScale} 
+                min={0.1} max={10} step={0.01} suffix="x" 
+                onAdjust={(v) => updateBg({ imageScale: v })} 
+             />
+             <div className="grid grid-cols-2 gap-4">
+               <RangeControl 
+                  label="X Offset" 
+                  value={project.background.imageOffsetX} 
+                  min={-200} max={200} step={1} suffix="%" 
+                  onAdjust={(v) => updateBg({ imageOffsetX: v })} 
+               />
+               <RangeControl 
+                  label="Y Offset" 
+                  value={project.background.imageOffsetY} 
+                  min={-200} max={200} step={1} suffix="%" 
+                  onAdjust={(v) => updateBg({ imageOffsetY: v })} 
+               />
+             </div>
+             <RangeControl 
+                label="Rotation" 
+                value={project.background.imageRotation} 
+                min={-180} max={180} step={1} suffix="°" 
+                onAdjust={(v) => updateBg({ imageRotation: v })} 
+             />
+             <div className="pt-2">
+                <input type="file" id="bg-file-replace" className="hidden" onChange={(e) => handleFileUpload(e, 'background')} />
+                <label htmlFor="bg-file-replace" className="line-art-btn block text-center py-2 bg-white text-[9px] font-black uppercase tracking-widest cursor-pointer hover:bg-gray-50 flex items-center justify-center space-x-2">
+                  <ImageIcon size={12} /> <span>Change Image</span>
+                </label>
+             </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <input type="file" id="bg-file-main" className="hidden" onChange={(e) => handleFileUpload(e, 'background')} />
+            <label htmlFor="bg-file-main" className="line-art-btn block text-center py-6 bg-white text-[10px] font-black uppercase tracking-widest cursor-pointer hover:bg-gray-50 flex flex-col items-center justify-center space-y-2">
+              <Upload size={24} />
+              <span>Upload Background Photo</span>
+            </label>
           </div>
         )}
       </ControlGroup>
@@ -189,22 +342,6 @@ const ProjectTab = memo(({ project, setProject, handleFileUpload }: any) => {
 
 const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCopy, pushToHistory }: any) => {
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
-
-  const reorder = (id: string, dir: 'up' | 'down') => {
-    setProject((prev: DesignProject) => {
-      const idx = prev.elements.findIndex(el => el.id === id);
-      if (idx === -1) return prev;
-      if (dir === 'up' && idx === prev.elements.length - 1) return prev;
-      if (dir === 'down' && idx === 0) return prev;
-      
-      pushToHistory(prev);
-      const nextElements = [...prev.elements];
-      const targetIdx = dir === 'up' ? idx + 1 : idx - 1;
-      const [moved] = nextElements.splice(idx, 1);
-      nextElements.splice(targetIdx, 0, moved);
-      return { ...prev, elements: nextElements };
-    });
-  };
 
   const remove = (id: string) => {
     setProject((prev: DesignProject) => {
@@ -226,7 +363,6 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
     e.preventDefault();
     if (draggedIdx === null || draggedIdx === index) return;
     
-    // Sort logic
     setProject((prev: DesignProject) => {
       const newElements = [...prev.elements];
       const draggedItem = newElements[draggedIdx];
@@ -250,8 +386,6 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
         </div>
       ) : (
         <div className="space-y-2">
-          {/* Note: In Canvas rendering, the LAST item in elements is on top. 
-              In the Layers panel UI, we show the LAST item (top layer) at the START of the list. */}
           {[...elements].reverse().map((el, i) => {
             const actualIdx = elements.length - 1 - i;
             return (
@@ -262,7 +396,7 @@ const LayersTab = memo(({ elements, selectedId, setSelectedId, setProject, onCop
                 onDragOver={(e) => handleDragOver(e, actualIdx)}
                 onDragEnd={handleDragEnd}
                 onClick={() => setSelectedId(el.id)}
-                className={`group border-2 p-3 flex items-center justify-between transition-all cursor-pointer ${selectedId === el.id ? 'border-black bg-black text-white shadow-lg scale-[1.02] z-10' : 'border-black/5 hover:border-black/20 bg-white'} ${draggedIdx === actualIdx ? 'opacity-50 border-dashed' : ''}`}
+                className={`group border-2 p-3 flex items-center justify-between transition-all cursor-pointer ${selectedId === el.id ? 'border-black bg-black text-white shadow-lg scale-[1.02] z-[100]' : 'border-black/5 hover:border-black/20 bg-white'} ${draggedIdx === actualIdx ? 'opacity-50 border-dashed' : ''}`}
               >
                 <div className="flex items-center space-x-3 overflow-hidden">
                   <div className="shrink-0 text-gray-400 group-hover:text-inherit">
@@ -395,7 +529,6 @@ const CanvasElementRenderer = memo(({
     top: `${el.y}%`,
     transform: `rotate(${el.rotation}deg) scale(${el.scale})`,
     transformOrigin: '0 0',
-    // Directly use the array index for z-index to ensure perfect layer sync
     zIndex: index + 1,
     position: 'absolute',
     userSelect: 'none',
@@ -495,12 +628,17 @@ const CanvasElementRenderer = memo(({
 
 // --- MAIN PAGE ---
 
-const STORAGE_KEY = 'coverart_current_project_v3';
-const SNAPSHOT_KEY = 'coverart_snapshots_v3';
+const STORAGE_KEY = 'coverart_current_project_v7';
+const SNAPSHOT_KEY = 'coverart_snapshots_v7';
 
 const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [project, setProject] = useState<DesignProject>({
-    id: '1', name: 'UNTITLED_COVER', background: { type: 'color', value: '#ffffff', rotation: 0, scale: 1, offsetX: 0, offsetY: 0, opacity: 1 },
+    id: '1', name: 'UNTITLED_COVER', 
+    background: { 
+      fillValue: '#ffffff', fillOpacity: 1, 
+      imageValue: '', imageOpacity: 0.8, 
+      imageRotation: 0, imageScale: 1, imageOffsetX: 0, imageOffsetY: 0 
+    },
     elements: [], aspectRatio: '1:1', lastModified: Date.now()
   });
   
@@ -516,9 +654,16 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [renamingSnapId, setRenamingSnapId] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<boolean>(false);
+  const [notification, setNotification] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef({ x: 0, y: 0, elX: 0, elY: 0, width: 0, height: 0 });
+
+  const showToast = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   const pushToHistory = useCallback((currentProject: DesignProject) => {
     setPast(prev => [...prev, JSON.parse(JSON.stringify(currentProject))].slice(-50));
@@ -558,8 +703,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       ...JSON.parse(JSON.stringify(clipboard)), 
       id: Math.random().toString(36).substr(2, 9),
       x: clipboard.x + 5,
-      y: clipboard.y + 5,
-      zIndex: project.elements.length
+      y: clipboard.y + 5
     };
     setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedId(newEl.id);
@@ -573,8 +717,7 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       ...JSON.parse(JSON.stringify(el)), 
       id: Math.random().toString(36).substr(2, 9),
       x: el.x + 5,
-      y: el.y + 5,
-      zIndex: project.elements.length
+      y: el.y + 5
     };
     setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedId(newEl.id);
@@ -632,9 +775,13 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) try { setProject(JSON.parse(saved)); } catch (e) {}
+    if (saved) {
+      try { 
+        setProject(migrateProject(JSON.parse(saved))); 
+      } catch (e) {}
+    }
     const snaps = localStorage.getItem(SNAPSHOT_KEY);
-    if (snaps) try { setSnapshots(JSON.parse(snaps)); } catch (e) {}
+    if (snaps) try { setSnapshots(JSON.parse(snaps).map((s: any) => ({ ...s, data: migrateProject(s.data) }))); } catch (e) {}
   }, []);
 
   useEffect(() => {
@@ -642,7 +789,15 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     return () => clearTimeout(handler);
   }, [project]);
 
-  useEffect(() => { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots)); }, [snapshots]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots));
+      setStorageError(false);
+    } catch (e) {
+      console.warn("Storage limit reached");
+      setStorageError(true);
+    }
+  }, [snapshots]);
 
   const exportConfig = () => {
     const configBlob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
@@ -662,32 +817,75 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       try {
         const imported = JSON.parse(event.target?.result as string);
         pushToHistory(project);
-        setProject(imported);
+        setProject(migrateProject(imported));
+        showToast("Configuration loaded successfully.");
       } catch (err) { alert("Invalid project configuration file."); }
     };
     reader.readAsText(file);
   };
 
-  const takeSnapshot = () => {
+  const takeSnapshot = async () => {
+    let thumbnail = undefined;
+    if (canvasRef.current) {
+        try {
+            // 设置 skipFonts 为 true 或 filter 跳过外部 CSS，防止 Failed to fetch 错误
+            thumbnail = await htmlToImage.toPng(canvasRef.current, { 
+              quality: 0.1, 
+              pixelRatio: 0.2,
+              style: { transform: 'scale(1)', transformOrigin: 'top left' },
+              cacheBust: true,
+              filter: (node: any) => {
+                // 跳过可能导致跨域错误的 link 标签
+                if (node.tagName === 'LINK' && node.rel === 'stylesheet' && !node.href.startsWith(window.location.origin)) return false;
+                return true;
+              }
+            });
+        } catch (e) { 
+            console.warn("Thumbnail generation skipped due to fetch error", e); 
+        }
+    }
+
     const newSnapshot: Snapshot = {
       id: Math.random().toString(36).substr(2, 9),
       name: `Revision ${snapshots.length + 1}`,
       timestamp: Date.now(),
-      data: JSON.parse(JSON.stringify(project))
+      data: JSON.parse(JSON.stringify(project)),
+      thumbnail
     };
-    setSnapshots([newSnapshot, ...snapshots]);
+    
+    setSnapshots(prev => [newSnapshot, ...prev].slice(0, 8)); 
+    showToast("Snapshot saved.");
   };
 
-  const restoreSnapshot = (snap: Snapshot) => {
-    if (confirm("Restore this snapshot? Current history will be pushed to undo stack.")) {
-      pushToHistory(project);
-      setProject(JSON.parse(JSON.stringify(snap.data)));
-      setSelectedId(null);
-      setEditingId(null);
+  const restoreSnapshot = useCallback((snap: Snapshot) => {
+    if (confirm("确定要恢复此快照吗？当前未保存的更改将丢失。")) {
+      try {
+        // 先备份当前状态以便撤销
+        setPast(prev => [...prev, JSON.parse(JSON.stringify(project))]);
+        
+        // 关键点：深拷贝数据并进行严格迁移
+        const snapCopy = JSON.parse(JSON.stringify(snap.data));
+        const freshData = migrateProject(snapCopy);
+        
+        // 显式重置修改时间（使用当前时间戳）并清除所有焦点，强制 React 重绘 Canvas 容器
+        // 使用 Date.now() 而不是 snap.id，确保即使恢复同一个快照也能触发 diff
+        setProject({
+          ...freshData,
+          lastModified: Date.now() 
+        });
+        
+        // 重置交互状态
+        setSelectedId(null);
+        setEditingId(null);
+        showToast("快照恢复成功");
+      } catch (e) {
+        console.error("Restoration failed", e);
+        alert("恢复失败：快照数据损坏。");
+      }
     }
-  };
+  }, [project]);
 
-  const deleteSnapshot = (id: string) => { setSnapshots(snapshots.filter(s => s.id !== id)); };
+  const deleteSnapshot = (id: string) => { setSnapshots(prev => prev.filter(s => s.id !== id)); };
 
   const renameSnapshot = (id: string, newName: string) => {
     setSnapshots(prev => prev.map(s => s.id === id ? { ...s, name: newName } : s));
@@ -773,8 +971,16 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       reader.onload = (event) => {
         const result = event.target?.result as string;
         pushToHistory(project);
-        if (type === 'background') { setProject(prev => ({ ...prev, background: { ...prev.background, type: 'image', value: result } })); }
-        else {
+        if (type === 'background') { 
+          setProject(prev => ({ 
+            ...prev, 
+            background: { 
+              ...prev.background, 
+              imageValue: result,
+              imageOpacity: 1 
+            } 
+          })); 
+        } else {
           const newImg: ImageElement = {
             id: Math.random().toString(36).substr(2, 9),
             type: 'image', src: result, x: 20, y: 20, rotation: 0, scale: 0.5, zIndex: project.elements.length, opacity: 1, width: 400, height: 400, borderRadius: 0
@@ -793,12 +999,27 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setSelectedId(null); setEditingId(null);
     await new Promise(r => setTimeout(r, 200));
     try {
-      const dataUrl = await htmlToImage.toPng(canvasRef.current!, { quality: 1.0, pixelRatio: 2 });
+      const dataUrl = await htmlToImage.toPng(canvasRef.current!, { 
+        quality: 1.0, 
+        pixelRatio: 2,
+        cacheBust: true,
+        filter: (node: any) => {
+          // 在导出时，如果遇到无法加载的跨域 CSS，我们通过 filter 优雅跳过，而不是让整个 fetch 挂掉
+          if (node.tagName === 'LINK' && node.rel === 'stylesheet' && !node.href.startsWith(window.location.origin)) {
+            return true; // 继续执行，虽然可能丢失字体样式，但不会报错
+          }
+          return true;
+        }
+      });
       const link = document.createElement('a');
       link.download = `${project.name.toLowerCase().replace(/\s+/g, '-') || 'cover'}.png`;
       link.href = dataUrl;
       link.click();
-    } catch (e) { alert("Export failed."); }
+      showToast("Masterpiece exported.");
+    } catch (e) { 
+      console.error("Export failed", e);
+      alert("导出失败：无法获取远程资源。请尝试刷新页面。"); 
+    }
     finally { setIsExporting(false); }
   };
 
@@ -806,7 +1027,14 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   return (
     <div className="flex flex-col h-screen bg-[#f8f8f8] overflow-hidden">
-      <header className="h-16 bg-white border-b-2 border-black flex items-center justify-between px-6 z-50 shrink-0">
+      {/* Success Notification */}
+      {notification && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[1000] bg-black text-white px-6 py-3 border-2 border-white shadow-2xl text-[10px] font-black uppercase tracking-widest animate-in slide-in-from-top-4 duration-300">
+          {notification}
+        </div>
+      )}
+
+      <header className="h-16 bg-white border-b-2 border-black flex items-center justify-between px-6 z-[60] shrink-0">
         <div className="flex items-center space-x-6">
           <button onClick={onBack} className="p-2 hover:bg-black hover:text-white rounded-full transition-all border-2 border-transparent hover:border-black">
             <ArrowLeft size={18} />
@@ -843,8 +1071,8 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-80 bg-white border-r-2 border-black flex flex-col z-40 shadow-xl overflow-hidden shrink-0">
-          <div className="flex border-b-2 border-black">
+        <aside className="w-80 bg-white border-r-2 border-black flex flex-col z-[50] shadow-xl overflow-hidden shrink-0">
+          <div className="flex border-b-2 border-black shrink-0">
             {[
               { id: 'project', icon: Settings2 },
               { id: 'layers', icon: LayersIcon },
@@ -889,30 +1117,36 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             )}
             {activeTab === 'history' && (
               <div className="h-full flex flex-col animate-in fade-in slide-in-from-left-4 duration-300">
-                {/* Upper: Snapshots */}
-                <div className="flex-1 overflow-y-auto space-y-6 pb-6">
-                  <div className="flex justify-between items-center mb-4">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Project Snapshots</label>
-                    <button onClick={takeSnapshot} className="p-1 hover:bg-black hover:text-white border border-black rounded transition-all" title="Save Revision">
-                      <Plus size={14}/>
+                <div className="flex-1 overflow-y-auto space-y-4 pb-6 min-h-[300px]">
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Snapshot Gallery</label>
+                    <button onClick={takeSnapshot} className="p-1 hover:bg-black hover:text-white border border-black rounded transition-all flex items-center space-x-1" title="Take Snapshot">
+                      <Camera size={14}/>
+                      <span className="text-[8px] font-black uppercase pr-1">Capture</span>
                     </button>
                   </div>
+                  {storageError && (
+                    <div className="mb-4 p-2 bg-red-50 border border-red-200 text-red-600 text-[9px] font-bold flex items-center space-x-2">
+                       <AlertCircle size={14} />
+                       <span>Storage Limit Hit. Some revisions might not persist.</span>
+                    </div>
+                  )}
                   {snapshots.length === 0 ? (
                     <div className="py-12 border-2 border-dashed border-gray-100 flex flex-col items-center text-center px-4">
-                      <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">No manual snapshots.</p>
+                      <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest leading-relaxed">No revisions captured yet.</p>
                     </div>
                   ) : snapshots.map(snap => (
-                    <div key={snap.id} className="group border-2 border-black p-3 hover:bg-gray-50 transition-all">
+                    <div key={snap.id} className="snapshot-item group border-2 border-black p-3 hover:border-black bg-white shadow-sm hover:shadow-md">
                       <div className="flex items-center justify-between mb-2">
                         {renamingSnapId === snap.id ? (
                           <div className="flex flex-1 items-center space-x-2">
-                            <input autoFocus onBlur={() => setRenamingSnapId(null)} onKeyDown={(e) => e.key === 'Enter' && setRenamingSnapId(null)} value={snap.name} onChange={(e) => renameSnapshot(snap.id, e.target.value)} className="flex-1 bg-white border border-black px-1 text-[10px] font-black outline-none" />
+                            <input autoFocus onBlur={() => setRenamingSnapId(null)} onKeyDown={(e) => e.key === 'Enter' && setRenamingSnapId(null)} value={snap.name} onChange={(e) => renameSnapshot(snap.id, e.target.value)} className="flex-1 bg-white border border-black px-1 text-[10px] font-black outline-none h-6" />
                             <button onClick={() => setRenamingSnapId(null)} className="text-black"><Check size={12}/></button>
                           </div>
                         ) : (
                           <div onClick={() => restoreSnapshot(snap)} className="flex flex-col cursor-pointer flex-1 overflow-hidden">
-                            <span className="text-[10px] font-black uppercase truncate">{snap.name}</span>
-                            <span className="text-[8px] text-gray-400 uppercase">{new Date(snap.timestamp).toLocaleTimeString()}</span>
+                            <span className="text-[10px] font-black uppercase truncate tracking-widest">{snap.name}</span>
+                            <span className="text-[8px] text-gray-400 uppercase font-bold">{new Date(snap.timestamp).toLocaleString()}</span>
                           </div>
                         )}
                         <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -920,22 +1154,27 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                           <button onClick={() => deleteSnapshot(snap.id)} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={12}/></button>
                         </div>
                       </div>
-                      <button onClick={() => restoreSnapshot(snap)} className="w-full py-1.5 border border-black text-[8px] font-black uppercase hover:bg-black hover:text-white transition-all">Restore</button>
+                      <div className="flex items-center space-x-3 h-14">
+                        {snap.thumbnail && <div className="w-14 h-full bg-gray-50 border border-black overflow-hidden shrink-0 flex items-center justify-center"><img src={snap.thumbnail} className="w-full h-full object-cover" alt="thumb" /></div>}
+                        <button onClick={() => restoreSnapshot(snap)} className="flex-1 h-full border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all flex items-center justify-center space-x-2">
+                          <RefreshCw size={12} />
+                          <span>Restore</span>
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
 
-                {/* Lower: Config */}
-                <div className="pt-6 border-t-2 border-black space-y-4">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">Configuration</label>
+                <div className="pt-6 border-t-2 border-black space-y-4 shrink-0 bg-white">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">External Persistence</label>
                   <div className="grid grid-cols-2 gap-2">
-                    <button onClick={exportConfig} className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2">
-                      <FileJson size={20}/>
-                      <span className="text-[8px] font-black uppercase">Export JSON</span>
+                    <button onClick={exportConfig} className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2 group">
+                      <FileJson size={20} className="group-hover:scale-110 transition-transform" />
+                      <span className="text-[8px] font-black uppercase tracking-widest">Save Project</span>
                     </button>
-                    <label htmlFor="import-json" className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2 cursor-pointer">
-                      <Upload size={20}/>
-                      <span className="text-[8px] font-black uppercase">Import JSON</span>
+                    <label htmlFor="import-json" className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2 cursor-pointer group">
+                      <Upload size={20} className="group-hover:scale-110 transition-transform" />
+                      <span className="text-[8px] font-black uppercase tracking-widest">Load Project</span>
                       <input type="file" id="import-json" className="hidden" accept=".json" onChange={importConfig} />
                     </label>
                   </div>
@@ -947,27 +1186,42 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <main className="flex-1 bg-[#e2e2e2] relative flex items-center justify-center p-8 overflow-hidden">
           <div 
             ref={canvasRef}
-            onMouseDown={() => { setSelectedId(null); setEditingId(null); }}
-            className="bg-white relative overflow-hidden border-4 border-black shadow-2xl transition-all duration-500 ease-out"
+            key={project.lastModified} // 通过 key 强制 React 在恢复快照时重新挂载 Canvas，确保 UI 彻底刷新
+            onMouseDown={() => { 
+              setSelectedId(null); 
+              setEditingId(null); 
+              setActiveTab('project');
+            }}
+            className="bg-white relative overflow-hidden border-4 border-black shadow-2xl transition-all duration-500 ease-out cursor-default"
             style={{
               width: project.aspectRatio === '1:1' ? '600px' : project.aspectRatio === '16:9' ? '800px' : project.aspectRatio === '9:16' ? '337.5px' : '480px',
               height: project.aspectRatio === '1:1' ? '600px' : project.aspectRatio === '16:9' ? '450px' : project.aspectRatio === '9:16' ? '600px' : '600px',
-              background: (project.background.type === 'color' || project.background.type === 'gradient') ? project.background.value : '#fff',
+              backgroundColor: project.background.fillValue,
             }}
           >
-            {project.background.type === 'image' && (
+            <div 
+              className="absolute inset-0 pointer-events-none" 
+              style={{ 
+                background: project.background.fillValue, 
+                opacity: project.background.fillOpacity 
+              }} 
+            />
+            
+            {project.background.imageValue && (
                <div 
                 className="absolute inset-0 pointer-events-none"
                 style={{
-                  backgroundImage: `url(${project.background.value})`,
-                  backgroundSize: 'cover', backgroundPosition: 'center',
-                  transform: `rotate(${project.background.rotation}deg) scale(${project.background.scale})`,
-                  opacity: project.background.opacity,
+                  backgroundImage: `url(${project.background.imageValue})`,
+                  backgroundSize: 'cover', 
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                  transform: `translate(${project.background.imageOffsetX}%, ${project.background.imageOffsetY}%) rotate(${project.background.imageRotation}deg) scale(${project.background.imageScale})`,
+                  opacity: project.background.imageOpacity,
                   willChange: 'transform',
                 }}
                />
             )}
-            {/* Direct mapping to array index for z-index source of truth */}
+
             {project.elements.map((el, index) => (
               <CanvasElementRenderer
                 key={el.id} el={el}
@@ -983,7 +1237,8 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               />
             ))}
           </div>
-          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center space-x-6 bg-white border-2 border-black px-8 py-4 shadow-xl z-50 rounded-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+          
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center space-x-6 bg-white border-2 border-black px-8 py-4 shadow-xl z-[100] rounded-full animate-in fade-in slide-in-from-bottom-4 duration-500">
               <button onClick={addText} className="flex flex-col items-center group transition-transform hover:scale-110" title="Add Text">
                 <TypeIcon size={20}/>
                 <span className="text-[7px] font-black uppercase tracking-[0.2em] mt-1 text-gray-400 group-hover:text-black">Text</span>

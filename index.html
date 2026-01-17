@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CoverArt Studio</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Playfair+Display:ital,wght@0,700;1,700&family=Space+Grotesk:wght@300;500;700&family=Permanent+Marker&family=Bebas+Neue&family=Monoton&family=Syncopate:wght@400;700&family=UnifrakturMaguntia&family=Abril+Fatface&family=Righteous&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Playfair+Display:ital,wght@0,700;1,700&family=Space+Grotesk:wght@300;500;700&family=Permanent+Marker&family=Bebas+Neue&family=Monoton&family=Syncopate:wght@400;700&family=UnifrakturMaguntia&family=Abril+Fatface&family=Righteous&display=swap" rel="stylesheet" crossorigin="anonymous">
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -39,6 +39,14 @@
         ::-webkit-scrollbar-thumb { background: #000; border-radius: 4px; }
         
         #root { min-height: 100vh; }
+
+        /* Snapshot list animation */
+        .snapshot-item {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .snapshot-item:hover {
+            transform: translateX(4px);
+        }
     </style>
 <script type="importmap">
 {

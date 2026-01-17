@@ -59,13 +59,14 @@ export interface DesignProject {
   id: string;
   name: string;
   background: {
-    type: 'color' | 'image' | 'gradient';
-    value: string;
-    rotation: number;
-    scale: number;
-    offsetX: number;
-    offsetY: number;
-    opacity: number;
+    fillValue: string;      // 纯色或渐变值
+    fillOpacity: number;    // 背景颜色透明度
+    imageValue: string;     // 图片 DataURL 或空字符串
+    imageOpacity: number;   // 图片透明度
+    imageRotation: number;
+    imageScale: number;
+    imageOffsetX: number;
+    imageOffsetY: number;
   };
   elements: CanvasElement[];
   aspectRatio: '1:1' | '16:9' | '4:5' | '9:16';
@@ -77,6 +78,7 @@ export interface Snapshot {
   name: string;
   timestamp: number;
   data: DesignProject;
+  thumbnail?: string; // 可选预览图
 }
 
 export const FONTS = [
