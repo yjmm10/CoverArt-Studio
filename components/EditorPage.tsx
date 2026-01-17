@@ -56,8 +56,12 @@ import * as htmlToImage from 'html-to-image';
 const migrateProject = (p: any): DesignProject => {
   if (!p) throw new Error("Null project data");
   
+  // Improved detection: If object has 'data' but no 'elements', treat as Snapshot wrapper.
+  // If it has 'elements', treat as DesignProject.
+  const sourceData = (p.data && !p.elements) ? p.data : p;
+
   // 深度克隆，确保完全断开引用，这是恢复快照的关键
-  const clone = JSON.parse(JSON.stringify(p));
+  const clone = JSON.parse(JSON.stringify(sourceData));
   
   // 1. 结构初始化
   if (!clone.background) clone.background = {};
@@ -799,14 +803,29 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   }, [snapshots]);
 
+  // Generic helper to download any project data as JSON
+  const downloadJSON = (data: any, filename: string) => {
+    try {
+      const configBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(configBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed", err);
+      showToast("Export failed.");
+    }
+  };
+
   const exportConfig = () => {
-    const configBlob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(configBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${project.name.toLowerCase().replace(/\s+/g, '-')}-config.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadJSON(project, `${project.name.toLowerCase().replace(/\s+/g, '-')}-config.json`);
+  };
+
+  const exportSnapshot = (snap: Snapshot) => {
+    downloadJSON(snap.data, `${snap.name.replace(/\s+/g, '-')}-snapshot.json`);
+    showToast("Snapshot saved to disk.");
   };
 
   const importConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -818,8 +837,8 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         const imported = JSON.parse(event.target?.result as string);
         pushToHistory(project);
         setProject(migrateProject(imported));
-        showToast("Configuration loaded successfully.");
-      } catch (err) { alert("Invalid project configuration file."); }
+        showToast("Snapshot loaded successfully.");
+      } catch (err) { alert("Invalid configuration file."); }
     };
     reader.readAsText(file);
   };
@@ -858,32 +877,30 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   };
 
   const restoreSnapshot = useCallback((snap: Snapshot) => {
-    if (confirm("确定要恢复此快照吗？当前未保存的更改将丢失。")) {
-      try {
-        // 先备份当前状态以便撤销
-        setPast(prev => [...prev, JSON.parse(JSON.stringify(project))]);
-        
-        // 关键点：深拷贝数据并进行严格迁移
-        const snapCopy = JSON.parse(JSON.stringify(snap.data));
-        const freshData = migrateProject(snapCopy);
-        
-        // 显式重置修改时间（使用当前时间戳）并清除所有焦点，强制 React 重绘 Canvas 容器
-        // 使用 Date.now() 而不是 snap.id，确保即使恢复同一个快照也能触发 diff
-        setProject({
-          ...freshData,
-          lastModified: Date.now() 
-        });
-        
-        // 重置交互状态
-        setSelectedId(null);
-        setEditingId(null);
-        showToast("快照恢复成功");
-      } catch (e) {
-        console.error("Restoration failed", e);
-        alert("恢复失败：快照数据损坏。");
-      }
+    try {
+      // Create backup of current state
+      pushToHistory(project);
+      
+      // Deep clone snapshot data
+      const rawData = JSON.parse(JSON.stringify(snap.data));
+      
+      // Sanitize
+      const validProject = migrateProject(rawData);
+      
+      // Update state with new timestamp to force refresh
+      setProject({
+        ...validProject,
+        lastModified: Date.now()
+      });
+      
+      setSelectedId(null);
+      setEditingId(null);
+      showToast(`Restored: ${snap.name}`);
+    } catch (e) {
+      console.error("Restoration failed", e);
+      showToast("Failed to restore.");
     }
-  }, [project]);
+  }, [project, pushToHistory]);
 
   const deleteSnapshot = (id: string) => { setSnapshots(prev => prev.filter(s => s.id !== id)); };
 
@@ -1156,10 +1173,15 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                       </div>
                       <div className="flex items-center space-x-3 h-14">
                         {snap.thumbnail && <div className="w-14 h-full bg-gray-50 border border-black overflow-hidden shrink-0 flex items-center justify-center"><img src={snap.thumbnail} className="w-full h-full object-cover" alt="thumb" /></div>}
-                        <button onClick={() => restoreSnapshot(snap)} className="flex-1 h-full border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all flex items-center justify-center space-x-2">
-                          <RefreshCw size={12} />
-                          <span>Restore</span>
-                        </button>
+                        <div className="flex-1 flex items-center space-x-2 h-full">
+                          <button onClick={() => restoreSnapshot(snap)} className="flex-1 h-full border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all flex items-center justify-center space-x-2">
+                            <RefreshCw size={12} />
+                            <span>Restore</span>
+                          </button>
+                          <button onClick={() => exportSnapshot(snap)} className="w-12 h-full border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all flex items-center justify-center" title="Save JSON">
+                            <Download size={14} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1167,14 +1189,10 @@ const EditorPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
                 <div className="pt-6 border-t-2 border-black space-y-4 shrink-0 bg-white">
                   <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">External Persistence</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={exportConfig} className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2 group">
-                      <FileJson size={20} className="group-hover:scale-110 transition-transform" />
-                      <span className="text-[8px] font-black uppercase tracking-widest">Save Project</span>
-                    </button>
+                  <div className="grid grid-cols-1 gap-2">
                     <label htmlFor="import-json" className="flex flex-col items-center justify-center border-2 border-black p-4 hover:bg-black hover:text-white transition-all space-y-2 cursor-pointer group">
                       <Upload size={20} className="group-hover:scale-110 transition-transform" />
-                      <span className="text-[8px] font-black uppercase tracking-widest">Load Project</span>
+                      <span className="text-[8px] font-black uppercase tracking-widest">Import Snapshot</span>
                       <input type="file" id="import-json" className="hidden" accept=".json" onChange={importConfig} />
                     </label>
                   </div>
